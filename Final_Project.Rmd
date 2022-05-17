@@ -1,0 +1,194 @@
+---
+title: "Linear Regression to Predict Weekly Sales"
+author: "Syed Muhammed Abubaker   Tien Ho   Bradley Haren   Jacob Haussler"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+```
+
+# Import the dataset
+```{r}
+walmart <- read.csv('./Walmart_Store_sales.csv', header = TRUE)
+head(walmart)
+```
+
+Let's look at a pairs plot of the data.
+```{r}
+pairs(walmart[c(3,5,6,7,8)])
+```
+
+There's definitely too much data contained here. Since this dataframe contains many different stores, let's look at one store at a time. 
+
+```{r}
+s1 = walmart %>% filter(Store == 36) %>% arrange(Date)
+pairs(s1[c(3,5,6,7,8)])
+```
+
+This looks much easier to work with. Let's create a quick model of the data.
+
+```{r}
+mlr = lm(Weekly_Sales ~ factor(Holiday_Flag) + Temperature + Fuel_Price + CPI + Unemployment, data=s1)
+summary(mlr)
+```
+
+This actually looks relatively good off the bat, with an adjusted R-squared value of 0.8473.
+The fitted regression line here is: 
+WeeklySales_hat = 4295736.1 - 9053.8(Holiday_Flag) + 242.8(Temperature) + 1733.3(Fuel_Price) - 17367.1(CPI) - 27347.8(Unemployment)
+
+However, in the pairs plot above we noticed that some of the relationships with weekly sales are not quite linear. Let's try a log transformation.
+
+```{r}
+mlr_log = lm(log(Weekly_Sales) ~ factor(Holiday_Flag) + Temperature + Fuel_Price + CPI + Unemployment, data=s1)
+summary(mlr_log)
+```
+
+This actually slightly improved the adjusted R^2 value to 0.8587. This looks like a good change in this case.
+The new fitted regression line is:
+log(WeeklySales_hat) = 22.6896722 - 0.0235910(Holiday_Flag) + 0.0005696(Temperature) + 0.0156304(Fuel_Price) - 0.0444870(CPI) - 0.0519033(Unemployment)
+
+We notice that not all of the variable are statistically significant. Let's try stepwise methods for variable selection in this model and see how it affects the results.
+
+```{r}
+library(StepReg)
+library(car)
+stepwise(s1[c(3,4,5,6,7,8)], y="Weekly_Sales", selection = "bidirection", select = "adjRsq")
+mlr_step <- lm(log(Weekly_Sales) ~ CPI + Unemployment + Temperature + factor(Holiday_Flag), data = s1)
+summary(mlr_step)
+vif(mlr_step)
+```
+
+Dropping Fuel Price from the model seems to increase the adjusted R^2 model, which suggests that it may not belong here. However, the VIF for CPI and Unemployment are around 9, which suggests that one of these may need to go. 
+
+```{r}
+mlr_step2 <- lm(log(Weekly_Sales) ~ CPI + Temperature + factor(Holiday_Flag), data = s1)
+summary(mlr_step2)
+vif(mlr_step2)
+```
+
+Removing Unemployment leads to a small decline in adjusted R-squared, but the VIF results show that we no longer are dealing with multicollinearity.
+The new regression line is:
+log(Weekly_Sales)_hat = 20.3530144 - 0.0353244(CPI) + 0.0007238(Temperature) - 0.0256877(HolidayFlag)
+
+
+Influential/Leverage Point Analysis
+```{r}
+# Finding high leverage points
+k=3
+n=143
+hat_value <- hatvalues(mlr_step2)
+which(hat_value > (2*(k+1)/n))
+row_num <- c(1:143)
+plot(row_num, hat_value, xlab = "row number",
+     ylab = "hatvalues", 
+     main = "Identification of high leverage points")
+abline(h = (2*(k+1)/n))
+```
+
+- We can see that the high leverege points are rows 32, 41, 43, 46, 48, 53, 118, 123, 141, 143.
+
+```{r}
+# Finding outliers using internally standardized residuals
+r1 <- rstandard(mlr_step2)
+which(abs(r1) > 3)
+row_num <- c(1:143)
+plot(c(1,143), c(-6, 6), xlab = "row number",
+     ylab = "internally studentized residuals", 
+     main = "Identification of outlier points",
+     type = "n")
+points(row_num, r1)
+abline(h = 3)
+abline(h = -3)
+```
+
+- Here we can see that through are model transformations we have no outlires in our model. 
+
+```{r}
+# Finding influential points using (dffits)
+d <- dffits(mlr_step2) #influential if abs(dffits) > 2*sqrt((k+2)/(n-k-2))
+which(abs(d) > 2*sqrt((k+2)/(n-k-2)))
+row_num <- c(1:143)
+plot(c(1,143), c(-1, 1),  xlab = "row number",
+     ylab = "deffits", 
+     main = "Identification of influential points", type = "n")
+points(row_num, d)
+abline(h = 2*sqrt((k+2)/(n-k-2)))
+abline(h = - 2*sqrt((k+2)/(n-k-2)))
+
+```
+
+- Here we can see that the most influential points are rows 14, 43, 53, 141, 143
+
+All leverage points and influential points are as follows: 14, 32, 41, 43, 46, 48, 53, 118, 123, 141, 143.
+Let's see what these outliers look like.
+
+```{r}
+s1[c(14, 32, 41, 43, 46, 48, 53, 118, 123, 141, 143),]
+```
+
+It appears that most of the outliers here are from Holiday_Flag. This may suggest that there are 2 "clusters" present in the data, and maybe this model is picking up more on the non-holidays since they are the dominant type in the data.
+
+#Residual Analysis
+
+Let's first check for independence of random error
+```{r}
+par(mfcol = c(3, 1))
+row_num <- c(1:nrow(s1))
+sort_x1 <- sort(s1$CPI, index.return=TRUE)
+sorted_residuals = mlr_step2$residuals[sort_x1$ix]
+plot(row_num, sorted_residuals, 
+     main = "Check for independence \n Residuals sorted by CPI")
+abline(h=0)
+
+sort_x2 <- sort(s1$Temperature, index.return=TRUE)
+sorted_residuals2 = mlr_step2$residuals[sort_x2$ix]
+plot(row_num, sorted_residuals2, 
+     main = "Check for independence \n Residuals sorted by Temperature")
+abline(h=0)
+
+sort_x3 <- sort(s1$Holiday_Flag, index.return=TRUE)
+sorted_residuals3 = mlr_step2$residuals[sort_x3$ix]
+plot(row_num, sorted_residuals3, 
+     main = "Check for independence \n Residuals sorted by Holiday Flag")
+abline(h=0)
+```
+
+Looks like each of these are relatively centered around 0 and are homoscedastic. So, we can conclude that there is independence of random error.
+
+Next, we'll check for zero mean and constant variance of random error
+```{r}
+plot(mlr_step2$fitted.values, mlr_step2$residuals, 
+     main = "Check for 0 mean and constant var \n  Residual vs. fitted value")
+abline(h=0)
+```
+
+And finally, we can check for normality of random error.
+
+```{r}
+qqnorm(mlr_step2$residuals)
+qqline(mlr_step2$residuals)
+```
+
+This is very straight on the normal line, meaning that our data comes most likely from a normal distribution.
+
+Other Analysis
+```{r}
+#Here's attempting to create a model for monthly sales.
+s1 = walmart %>% filter(Store == 36) %>% arrange(Date)
+s1$Date = as.Date(s1$Date, format = '%d-%m-%Y')
+s1$month = format(s1$Date, '%m')
+s1$year = format(s1$Date, '%Y')
+s1_monthly = s1 %>% group_by(month, year, Store) %>% summarise(Monthly_Sales = sum(Weekly_Sales), 
+                                                  Temperature = mean(Temperature), 
+                                                  Fuel_Price = mean(Fuel_Price),
+                                                  CPI = mean(CPI),
+                                                  Unemployment = mean(Unemployment),
+                                                  Holiday_Flag = ifelse(sum(Holiday_Flag) >= 1, 1, 0),
+                                                  .groups = 'drop')
+
+mlr_monthly = lm(Monthly_Sales ~ factor(Holiday_Flag) + Temperature + Fuel_Price + CPI + Unemployment, data=s1_monthly)
+summary(mlr_monthly) #monthly sales adj R^2 = 0.6162
+#notice adjusted R^2 significantly dropped off. We will stick to a weekly model.
+```
+
